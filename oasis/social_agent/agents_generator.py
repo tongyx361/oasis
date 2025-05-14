@@ -16,7 +16,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
-from typing import List, Union
+from typing import List, Union, Optional
 
 import pandas as pd
 import tqdm
@@ -32,10 +32,11 @@ from oasis.social_platform.typing import ActionType
 
 
 async def generate_agents(
-    agent_info_path: str,
-    twitter_channel: Channel,
     model: Union[BaseModelBackend, List[BaseModelBackend]],
     start_time,
+    twitter_channel: Channel,
+    agent_info: Optional[pd.DataFrame] = None,
+    agent_info_path: Optional[str] = None,
     recsys_type: str = "twitter",
     twitter: Platform = None,
     available_actions: list[ActionType] = None,
@@ -60,7 +61,8 @@ async def generate_agents(
         dict: A dictionary of agent IDs mapped to their respective agent
             class instances.
     """
-    agent_info = pd.read_csv(agent_info_path)
+    if agent_info is None and agent_info_path is not None:
+        agent_info = pd.read_csv(agent_info_path)
 
     agent_graph = (AgentGraph() if neo4j_config is None else AgentGraph(
         backend="neo4j",
