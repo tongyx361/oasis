@@ -16,7 +16,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
-from typing import List, Union, Optional
+from typing import List, Optional, Union
 
 import pandas as pd
 import tqdm
@@ -63,27 +63,34 @@ async def generate_agents(
     """
     if agent_info is None and agent_info_path is not None:
         agent_info = pd.read_csv(agent_info_path)
+    assert agent_info is not None
 
-    agent_graph = (AgentGraph() if neo4j_config is None else AgentGraph(
-        backend="neo4j",
-        neo4j_config=neo4j_config,
-    ))
+    # print(f"Generating agent graph with {agent_info=}")
+    agent_graph = (
+        AgentGraph()
+        if neo4j_config is None
+        else AgentGraph(
+            backend="neo4j",
+            neo4j_config=neo4j_config,
+        )
+    )
+    # print(f"Generated {agent_graph=}")
 
-    # agent_graph = []
     sign_up_list = []
     follow_list = []
     user_update1 = []
     user_update2 = []
     post_list = []
 
+    # print(f"Generating {len(agent_info)} agents")
+    agents: list[SocialAgent] = []
     for agent_id in range(len(agent_info)):
         profile = {
             "nodes": [],
             "edges": [],
             "other_info": {},
         }
-        profile["other_info"]["user_profile"] = agent_info["user_char"][
-            agent_id]
+        profile["other_info"]["user_profile"] = agent_info["user_char"][agent_id]
 
         user_info = UserInfo(
             name=agent_info["username"][agent_id],
@@ -92,6 +99,7 @@ async def generate_agents(
             recsys_type=recsys_type,
         )
 
+        # print(f"Generating agent {agent_id}")
         agent = SocialAgent(
             agent_id=agent_id,
             user_info=user_info,
@@ -102,76 +110,92 @@ async def generate_agents(
         )
 
         agent_graph.add_agent(agent)
+        agents.append(agent)
+
+    for agent_id, agent in enumerate(agents):
+        # print(f"Adding agent {agent_id} to agent graph")
+
         # TODO we should not use following_count and followers_count
         # We should calculate the number of followings and followers
         # based on the graph because the following situation is dynamic.
         num_followings = 0
         num_followers = 0
 
-        sign_up_list.append((
-            agent_id,
-            agent_id,
-            agent_info["username"][agent_id],
-            agent_info["name"][agent_id],
-            agent_info["description"][agent_id],
-            start_time,
-            num_followings,
-            num_followers,
-        ))
+        sign_up_list.append(
+            (
+                agent_id,
+                agent_id,
+                agent_info["username"][agent_id],
+                agent_info["name"][agent_id],
+                agent_info["description"][agent_id],
+                start_time,
+                num_followings,
+                num_followers,
+            )
+        )
 
-        following_id_list = ast.literal_eval(
-            agent_info["following_agentid_list"][agent_id])
+        following_id_list_literal = agent_info["following_agentid_list"][agent_id]
+        # print(f"Parsing {following_id_list_literal=}")
+        following_id_list = ast.literal_eval(following_id_list_literal)
         if not isinstance(following_id_list, int):
             if len(following_id_list) != 0:
                 for follow_id in following_id_list:
                     follow_list.append((agent_id, follow_id, start_time))
-                    user_update1.append((agent_id, ))
-                    user_update2.append((follow_id, ))
+                    user_update1.append((agent_id,))
+                    user_update2.append((follow_id,))
+                    # print(
+                    #     f"Adding edge {agent_id} -> {follow_id} to"
+                    #     f"\nnode_ids: {[node[0] for node in agent_graph.get_agents()]}"
+                    #     f"\nedges: {[edge for edge in agent_graph.get_edges()]}"
+                    # )
                     agent_graph.add_edge(agent_id, follow_id)
 
-        previous_posts = ast.literal_eval(
-            agent_info["previous_tweets"][agent_id])
+        previous_posts_literal = agent_info["previous_tweets"][agent_id]
+        # print(f"Parsing {previous_posts_literal=}")
+        previous_posts = ast.literal_eval(previous_posts_literal)
         if len(previous_posts) != 0:
             for post in previous_posts:
                 post_list.append((agent_id, post, start_time, 0, 0))
-
+        # print(f"Added {agent_id=}")
     # generate_log.info('agent gegenerate finished.')
 
+    # print(f"Initializing database...")
     user_insert_query = (
         "INSERT INTO user (user_id, agent_id, user_name, name, bio, "
         "created_at, num_followings, num_followers) VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(user_insert_query,
-                                              sign_up_list,
-                                              commit=True)
+        "(?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        user_insert_query, sign_up_list, commit=True
+    )
 
     follow_insert_query = (
-        "INSERT INTO follow (follower_id, followee_id, created_at) "
-        "VALUES (?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(follow_insert_query,
-                                              follow_list,
-                                              commit=True)
+        "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        follow_insert_query, follow_list, commit=True
+    )
     user_update_query1 = (
-        "UPDATE user SET num_followings = num_followings + 1 "
-        "WHERE user_id = ?")
-    twitter.pl_utils._execute_many_db_command(user_update_query1,
-                                              user_update1,
-                                              commit=True)
+        "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        user_update_query1, user_update1, commit=True
+    )
 
-    user_update_query2 = ("UPDATE user SET num_followers = num_followers + 1 "
-                          "WHERE user_id = ?")
-    twitter.pl_utils._execute_many_db_command(user_update_query2,
-                                              user_update2,
-                                              commit=True)
+    user_update_query2 = (
+        "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        user_update_query2, user_update2, commit=True
+    )
 
     # generate_log.info('twitter followee update finished.')
 
     post_insert_query = (
         "INSERT INTO post (user_id, content, created_at, num_likes, "
-        "num_dislikes) VALUES (?, ?, ?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(post_insert_query,
-                                              post_list,
-                                              commit=True)
+        "num_dislikes) VALUES (?, ?, ?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(post_insert_query, post_list, commit=True)
 
     # generate_log.info('twitter creat post finished.')
 
@@ -187,7 +211,7 @@ async def generate_agents_100w(
     twitter: Platform = None,
     available_actions: list[ActionType] = None,
 ) -> List:
-    """ TODO: need update the description of args.
+    """TODO: need update the description of args.
     Generate and return a dictionary of agents from the agent
     information CSV file. Each agent is added to the database and
     their respective profiles are updated.
@@ -222,12 +246,9 @@ async def generate_agents_100w(
 
     # precompute to speed up agent generation in one million scale
     _ = agent_info["following_agentid_list"].apply(ast.literal_eval)
-    previous_tweets_lists = agent_info["previous_tweets"].apply(
-        ast.literal_eval)
-    previous_tweets_lists = agent_info['previous_tweets'].apply(
-        ast.literal_eval)
-    following_id_lists = agent_info["following_agentid_list"].apply(
-        ast.literal_eval)
+    previous_tweets_lists = agent_info["previous_tweets"].apply(ast.literal_eval)
+    previous_tweets_lists = agent_info["previous_tweets"].apply(ast.literal_eval)
+    following_id_lists = agent_info["following_agentid_list"].apply(ast.literal_eval)
 
     for agent_id in tqdm.tqdm(range(len(agent_info))):
         profile = {
@@ -235,8 +256,7 @@ async def generate_agents_100w(
             "edges": [],
             "other_info": {},
         }
-        profile["other_info"]["user_profile"] = agent_info["user_char"][
-            agent_id]
+        profile["other_info"]["user_profile"] = agent_info["user_char"][agent_id]
         # TODO if you simulate one million agents, use active threshold below.
         # profile['other_info']['active_threshold'] = [0.01] * 24
 
@@ -262,26 +282,28 @@ async def generate_agents_100w(
         # print('agent_info["following_count"]', agent_info["following_count"])
 
         # TODO some data does not cotain this key.
-        if 'following_count' not in agent_info.columns:
-            agent_info['following_count'] = 0
-        if 'followers_count' not in agent_info.columns:
-            agent_info['followers_count'] = 0
+        if "following_count" not in agent_info.columns:
+            agent_info["following_count"] = 0
+        if "followers_count" not in agent_info.columns:
+            agent_info["followers_count"] = 0
 
         if not agent_info["following_count"].empty:
             num_followings = agent_info["following_count"][agent_id]
         if not agent_info["followers_count"].empty:
             num_followers = agent_info["followers_count"][agent_id]
 
-        sign_up_list.append((
-            agent_id,
-            agent_id,
-            agent_info["username"][agent_id],
-            agent_info["name"][agent_id],
-            agent_info["description"][agent_id],
-            start_time,
-            num_followings,
-            num_followers,
-        ))
+        sign_up_list.append(
+            (
+                agent_id,
+                agent_id,
+                agent_info["username"][agent_id],
+                agent_info["name"][agent_id],
+                agent_info["description"][agent_id],
+                start_time,
+                num_followings,
+                num_followers,
+            )
+        )
 
         following_id_list = following_id_lists[agent_id]
 
@@ -291,8 +313,8 @@ async def generate_agents_100w(
             if len(following_id_list) != 0:
                 for follow_id in following_id_list:
                     follow_list.append((agent_id, follow_id, start_time))
-                    user_update1.append((agent_id, ))
-                    user_update2.append((follow_id, ))
+                    user_update1.append((agent_id,))
+                    user_update2.append((follow_id,))
                     # agent_graph.add_edge(agent_id, follow_id)
 
         previous_posts = previous_tweets_lists[agent_id]
@@ -305,42 +327,43 @@ async def generate_agents_100w(
     user_insert_query = (
         "INSERT INTO user (user_id, agent_id, user_name, name, bio, "
         "created_at, num_followings, num_followers) VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(user_insert_query,
-                                              sign_up_list,
-                                              commit=True)
+        "(?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        user_insert_query, sign_up_list, commit=True
+    )
 
     follow_insert_query = (
-        "INSERT INTO follow (follower_id, followee_id, created_at) "
-        "VALUES (?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(follow_insert_query,
-                                              follow_list,
-                                              commit=True)
+        "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(
+        follow_insert_query, follow_list, commit=True
+    )
 
-    if not (agent_info["following_count"].empty
-            and agent_info["followers_count"].empty):
+    if not (
+        agent_info["following_count"].empty and agent_info["followers_count"].empty
+    ):
         user_update_query1 = (
-            "UPDATE user SET num_followings = num_followings + 1 "
-            "WHERE user_id = ?")
-        twitter.pl_utils._execute_many_db_command(user_update_query1,
-                                                  user_update1,
-                                                  commit=True)
+            "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
+        )
+        twitter.pl_utils._execute_many_db_command(
+            user_update_query1, user_update1, commit=True
+        )
 
         user_update_query2 = (
-            "UPDATE user SET num_followers = num_followers + 1 "
-            "WHERE user_id = ?")
-        twitter.pl_utils._execute_many_db_command(user_update_query2,
-                                                  user_update2,
-                                                  commit=True)
+            "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
+        )
+        twitter.pl_utils._execute_many_db_command(
+            user_update_query2, user_update2, commit=True
+        )
 
     # generate_log.info('twitter followee update finished.')
 
     post_insert_query = (
         "INSERT INTO post (user_id, content, created_at, num_likes, "
-        "num_dislikes) VALUES (?, ?, ?, ?, ?)")
-    twitter.pl_utils._execute_many_db_command(post_insert_query,
-                                              post_list,
-                                              commit=True)
+        "num_dislikes) VALUES (?, ?, ?, ?, ?)"
+    )
+    twitter.pl_utils._execute_many_db_command(post_insert_query, post_list, commit=True)
 
     # generate_log.info('twitter creat post finished.')
 
@@ -356,16 +379,16 @@ async def generate_controllable_agents(
     for i in range(control_user_num):
         user_info = UserInfo(
             is_controllable=True,
-            profile={"other_info": {
-                "user_profile": "None"
-            }},
+            profile={"other_info": {"user_profile": "None"}},
             recsys_type="reddit",
         )
         # controllable的agent_id全都在llm agent的agent_id的前面
-        agent = SocialAgent(agent_id=i,
-                            user_info=user_info,
-                            twitter_channel=channel,
-                            agent_graph=agent_graph)
+        agent = SocialAgent(
+            agent_id=i,
+            user_info=user_info,
+            twitter_channel=channel,
+            agent_graph=agent_graph,
+        )
         # Add agent to the agent graph
         agent_graph.add_agent(agent)
 
@@ -485,9 +508,9 @@ async def generate_reddit_agents(
 
         # Sign up agent and add their information to the database
         # print(f"Signing up agent {agent_info['username'][i]}...")
-        response = await agent.env.action.sign_up(agent_info[i]["username"],
-                                                  agent_info[i]["realname"],
-                                                  agent_info[i]["bio"])
+        response = await agent.env.action.sign_up(
+            agent_info[i]["username"], agent_info[i]["realname"], agent_info[i]["bio"]
+        )
         user_id = response["user_id"]
         agent_user_id_mapping[i + control_user_num] = user_id
 
@@ -509,9 +532,11 @@ async def generate_reddit_agents(
 """
 
             agent_msg = BaseMessage.make_assistant_message(
-                role_name="Assistant", content=content)
+                role_name="Assistant", content=content
+            )
             agent.memory.write_record(
-                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT))
+                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT)
+            )
         elif mute_post_agent:
             await agent.env.action.mute(1)
             content = """
@@ -525,9 +550,11 @@ async def generate_reddit_agents(
 }
 """
             agent_msg = BaseMessage.make_assistant_message(
-                role_name="Assistant", content=content)
+                role_name="Assistant", content=content
+            )
             agent.memory.write_record(
-                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT))
+                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT)
+            )
 
     tasks = [process_agent(i) for i in range(len(agent_info))]
     await asyncio.gather(*tasks)

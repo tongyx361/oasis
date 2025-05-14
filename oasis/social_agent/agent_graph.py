@@ -197,16 +197,19 @@ class AgentGraph:
         self.agent_mappings: dict[int, SocialAgent] = {}
 
     def add_agent(self, agent: SocialAgent):
+        # print(f"Adding {agent.social_agent_id=} to agent graph")
         if self.backend == "igraph":
             self.graph.add_vertex(agent.social_agent_id)
         else:
             self.graph.create_agent(agent.social_agent_id)
         self.agent_mappings[agent.social_agent_id] = agent
+        # print(f"Added {agent.social_agent_id=} to agent graph")
 
     def add_edge(self, agent_id_0: int, agent_id_1: int):
         try:
             self.graph.add_edge(agent_id_0, agent_id_1)
-        except Exception:
+        except Exception as e:
+            print(f"Error adding edge {agent_id_0} -> {agent_id_1}: {e}")
             pass
 
     def remove_agent(self, agent: SocialAgent):
