@@ -104,15 +104,6 @@ class SocialAgent(ChatAgent):
                          tools=all_tools,
                          single_iteration=single_iteration)
         self.agent_graph = agent_graph
-        self.test_prompt = (
-            "\n"
-            "Helen is a successful writer who usually writes popular western "
-            "novels. Now, she has an idea for a new novel that could really "
-            "make a big impact. If it works out, it could greatly "
-            "improve her career. But if it fails, she will have spent "
-            "a lot of time and effort for nothing.\n"
-            "\n"
-            "What do you think Helen should do?")
 
     async def perform_action_by_llm(self):
         # Get posts:
@@ -126,15 +117,16 @@ class SocialAgent(ChatAgent):
                 f"Here is your social media environment: {env_prompt}"))
         try:
             agent_log.info(
-                f"Agent {self.social_agent_id} observing environment: "
-                f"{env_prompt}")
+                f"Agent {self.social_agent_id} {user_msg=}")
             response = await self.astep(user_msg)
+            agent_log.info(f"Agent {self.social_agent_id} {response=}")
             for tool_call in response.info['tool_calls']:
                 action_name = tool_call.tool_name
                 args = tool_call.args
                 agent_log.info(f"Agent {self.social_agent_id} performed "
                                f"action: {action_name} with args: {args}")
                 return response
+                # TODO: Should we uncomment this?
                 # Abort graph action for if 100w Agent
                 # self.perform_agent_graph_action(action_name, args)
         except Exception as e:
@@ -162,23 +154,21 @@ class SocialAgent(ChatAgent):
             self.system_message.content.split("# RESPONSE FORMAT")[0],
         }] + openai_messages + [{
             "role": "user",
-            "content": self.test_prompt
+            "content": "Please create a post with the following content: Hello, world!"
         }])
 
         agent_log.info(f"Agent {self.social_agent_id}: {openai_messages}")
         # NOTE: this is a temporary solution.
         # Camel can not stop updating the agents' memory after stop and astep
         # now.
+        tool_schemas = self._get_full_tool_schemas()
+        agent_log.info(f"Agent {self.social_agent_id}: {tool_schemas=}")
         response = self._get_model_response(openai_messages=openai_messages,
-                                            num_tokens=num_tokens)
-        content = response.output_messages[0].content
+                                            num_tokens=num_tokens,
+                                            tool_schemas=tool_schemas)
         agent_log.info(
-            f"Agent {self.social_agent_id} receive response: {content}")
-        return {
-            "user_id": self.social_agent_id,
-            "prompt": openai_messages,
-            "content": content
-        }
+            f"Agent {self.social_agent_id} receive {response=}")
+        return response
 
     async def perform_action_by_hci(self) -> Any:
         print("Please choose one function to perform:")
