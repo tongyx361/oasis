@@ -22,7 +22,7 @@ import pandas as pd
 import tqdm
 from camel.memories import MemoryRecord
 from camel.messages import BaseMessage
-from camel.models import BaseModelBackend
+from camel.models import BaseModelBackend, ModelManager
 from camel.types import OpenAIBackendRole
 
 from oasis.social_agent import AgentGraph, SocialAgent
@@ -34,7 +34,7 @@ from oasis.social_platform.typing import ActionType
 async def generate_agents(
     model: Union[BaseModelBackend, List[BaseModelBackend]],
     start_time,
-    twitter_channel: Channel,
+    channel: Platform,
     agent_info: Optional[pd.DataFrame] = None,
     agent_info_path: Optional[str] = None,
     recsys_type: str = "twitter",
@@ -103,7 +103,7 @@ async def generate_agents(
         agent = SocialAgent(
             agent_id=agent_id,
             user_info=user_info,
-            twitter_channel=twitter_channel,
+            channel=channel,
             model=model,
             agent_graph=agent_graph,
             available_actions=available_actions,
@@ -165,35 +165,20 @@ async def generate_agents(
         "created_at, num_followings, num_followers) VALUES "
         "(?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    twitter.pl_utils._execute_many_db_command(
-        user_insert_query, sign_up_list, commit=True
-    )
+    twitter.pl_utils._execute_many_db_command(user_insert_query, sign_up_list, commit=True)
 
-    follow_insert_query = (
-        "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
-    )
-    twitter.pl_utils._execute_many_db_command(
-        follow_insert_query, follow_list, commit=True
-    )
-    user_update_query1 = (
-        "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
-    )
-    twitter.pl_utils._execute_many_db_command(
-        user_update_query1, user_update1, commit=True
-    )
+    follow_insert_query = "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
+    twitter.pl_utils._execute_many_db_command(follow_insert_query, follow_list, commit=True)
+    user_update_query1 = "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
+    twitter.pl_utils._execute_many_db_command(user_update_query1, user_update1, commit=True)
 
-    user_update_query2 = (
-        "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
-    )
-    twitter.pl_utils._execute_many_db_command(
-        user_update_query2, user_update2, commit=True
-    )
+    user_update_query2 = "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
+    twitter.pl_utils._execute_many_db_command(user_update_query2, user_update2, commit=True)
 
     # generate_log.info('twitter followee update finished.')
 
     post_insert_query = (
-        "INSERT INTO post (user_id, content, created_at, num_likes, "
-        "num_dislikes) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO post (user_id, content, created_at, num_likes, num_dislikes) VALUES (?, ?, ?, ?, ?)"
     )
     twitter.pl_utils._execute_many_db_command(post_insert_query, post_list, commit=True)
 
@@ -204,7 +189,7 @@ async def generate_agents(
 
 async def generate_agents_100w(
     agent_info_path: str,
-    twitter_channel: Channel,
+    channel: Channel,
     start_time,
     model: Union[BaseModelBackend, List[BaseModelBackend]],
     recsys_type: str = "twitter",
@@ -270,7 +255,7 @@ async def generate_agents_100w(
         agent = SocialAgent(
             agent_id=agent_id,
             user_info=user_info,
-            twitter_channel=twitter_channel,
+            channel=channel,
             model=model,
             agent_graph=agent_graph,
             available_actions=available_actions,
@@ -329,39 +314,22 @@ async def generate_agents_100w(
         "created_at, num_followings, num_followers) VALUES "
         "(?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    twitter.pl_utils._execute_many_db_command(
-        user_insert_query, sign_up_list, commit=True
-    )
+    twitter.pl_utils._execute_many_db_command(user_insert_query, sign_up_list, commit=True)
 
-    follow_insert_query = (
-        "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
-    )
-    twitter.pl_utils._execute_many_db_command(
-        follow_insert_query, follow_list, commit=True
-    )
+    follow_insert_query = "INSERT INTO follow (follower_id, followee_id, created_at) VALUES (?, ?, ?)"
+    twitter.pl_utils._execute_many_db_command(follow_insert_query, follow_list, commit=True)
 
-    if not (
-        agent_info["following_count"].empty and agent_info["followers_count"].empty
-    ):
-        user_update_query1 = (
-            "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
-        )
-        twitter.pl_utils._execute_many_db_command(
-            user_update_query1, user_update1, commit=True
-        )
+    if not (agent_info["following_count"].empty and agent_info["followers_count"].empty):
+        user_update_query1 = "UPDATE user SET num_followings = num_followings + 1 WHERE user_id = ?"
+        twitter.pl_utils._execute_many_db_command(user_update_query1, user_update1, commit=True)
 
-        user_update_query2 = (
-            "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
-        )
-        twitter.pl_utils._execute_many_db_command(
-            user_update_query2, user_update2, commit=True
-        )
+        user_update_query2 = "UPDATE user SET num_followers = num_followers + 1 WHERE user_id = ?"
+        twitter.pl_utils._execute_many_db_command(user_update_query2, user_update2, commit=True)
 
     # generate_log.info('twitter followee update finished.')
 
     post_insert_query = (
-        "INSERT INTO post (user_id, content, created_at, num_likes, "
-        "num_dislikes) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO post (user_id, content, created_at, num_likes, num_dislikes) VALUES (?, ?, ?, ?, ?)"
     )
     twitter.pl_utils._execute_many_db_command(post_insert_query, post_list, commit=True)
 
@@ -414,7 +382,7 @@ async def generate_controllable_agents(
 async def gen_control_agents_with_data(
     channel: Channel,
     control_user_num: int,
-    models: list[BaseModelBackend],
+    models: list[BaseModelBackend] | None = None,
 ) -> tuple[AgentGraph, dict]:
     agent_graph = AgentGraph()
     agent_user_id_mapping = {}
@@ -436,7 +404,7 @@ async def gen_control_agents_with_data(
         agent = SocialAgent(
             agent_id=i,
             user_info=user_info,
-            twitter_channel=channel,
+            channel=channel,
             agent_graph=agent_graph,
             model=models,
             available_actions=None,
@@ -455,12 +423,12 @@ async def gen_control_agents_with_data(
 
 async def generate_reddit_agents(
     agent_info_path: str,
-    twitter_channel: Channel,
+    channel: Channel,
     agent_graph: AgentGraph | None = None,
     agent_user_id_mapping: dict[int, int] | None = None,
     follow_post_agent: bool = False,
     mute_post_agent: bool = False,
-    model: BaseModelBackend = None,
+    model: Optional[Union[BaseModelBackend, List[BaseModelBackend], ModelManager]] = None,
     available_actions: list[ActionType] = None,
 ) -> AgentGraph:
     if agent_user_id_mapping is None:
@@ -497,7 +465,7 @@ async def generate_reddit_agents(
         agent = SocialAgent(
             agent_id=i + control_user_num,
             user_info=user_info,
-            twitter_channel=twitter_channel,
+            channel=channel,
             agent_graph=agent_graph,
             model=model,
             available_actions=available_actions,
@@ -531,12 +499,8 @@ async def generate_reddit_agents(
 }
 """
 
-            agent_msg = BaseMessage.make_assistant_message(
-                role_name="Assistant", content=content
-            )
-            agent.memory.write_record(
-                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT)
-            )
+            agent_msg = BaseMessage.make_assistant_message(role_name="Assistant", content=content)
+            agent.memory.write_record(MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT))
         elif mute_post_agent:
             await agent.env.action.mute(1)
             content = """
@@ -549,14 +513,121 @@ async def generate_reddit_agents(
         }
 }
 """
-            agent_msg = BaseMessage.make_assistant_message(
-                role_name="Assistant", content=content
-            )
-            agent.memory.write_record(
-                MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT)
-            )
+            agent_msg = BaseMessage.make_assistant_message(role_name="Assistant", content=content)
+            agent.memory.write_record(MemoryRecord(agent_msg, OpenAIBackendRole.ASSISTANT))
 
     tasks = [process_agent(i) for i in range(len(agent_info))]
     await asyncio.gather(*tasks)
 
+    return agent_graph
+
+
+def connect_platform_channel(
+    channel: Channel,
+    agent_graph: AgentGraph | None = None,
+) -> AgentGraph:
+    for _, agent in agent_graph.get_agents():
+        agent.channel = channel
+        agent.env.action.channel = channel
+    return agent_graph
+
+
+async def generate_custom_agents(
+    channel: Channel,
+    agent_graph: AgentGraph | None = None,
+) -> AgentGraph:
+    if agent_graph is None:
+        agent_graph = AgentGraph()
+
+    agent_graph = connect_platform_channel(channel=channel, agent_graph=agent_graph)
+
+    sign_up_tasks = [
+        agent.env.action.sign_up(
+            user_name=agent.user_info.user_name, name=agent.user_info.name, bio=agent.user_info.description
+        )
+        for _, agent in agent_graph.get_agents()
+    ]
+    await asyncio.gather(*sign_up_tasks)
+    return agent_graph
+
+
+async def generate_reddit_agent_graph(
+    profile_path: str,
+    model: Optional[Union[BaseModelBackend, List[BaseModelBackend], ModelManager]] = None,
+    available_actions: list[ActionType] = None,
+) -> AgentGraph:
+    agent_graph = AgentGraph()
+    with open(profile_path, "r") as file:
+        agent_info = json.load(file)
+
+    async def process_agent(i):
+        # Instantiate an agent
+        profile = {
+            "nodes": [],  # Relationships with other agents
+            "edges": [],  # Relationship details
+            "other_info": {},
+        }
+        # Update agent profile with additional information
+        profile["other_info"]["user_profile"] = agent_info[i]["persona"]
+        profile["other_info"]["mbti"] = agent_info[i]["mbti"]
+        profile["other_info"]["gender"] = agent_info[i]["gender"]
+        profile["other_info"]["age"] = agent_info[i]["age"]
+        profile["other_info"]["country"] = agent_info[i]["country"]
+
+        user_info = UserInfo(
+            name=agent_info[i]["username"],
+            description=agent_info[i]["bio"],
+            profile=profile,
+            recsys_type="reddit",
+        )
+
+        agent = SocialAgent(
+            agent_id=i,
+            user_info=user_info,
+            agent_graph=agent_graph,
+            model=model,
+            available_actions=available_actions,
+        )
+
+        # Add agent to the agent graph
+        agent_graph.add_agent(agent)
+
+    tasks = [process_agent(i) for i in range(len(agent_info))]
+    await asyncio.gather(*tasks)
+    return agent_graph
+
+
+async def generate_twitter_agent_graph(
+    profile_path: str,
+    model: Optional[Union[BaseModelBackend, List[BaseModelBackend], ModelManager]] = None,
+    available_actions: list[ActionType] = None,
+) -> AgentGraph:
+    agent_info = pd.read_csv(profile_path)
+
+    agent_graph = AgentGraph()
+
+    for agent_id in range(len(agent_info)):
+        profile = {
+            "nodes": [],
+            "edges": [],
+            "other_info": {},
+        }
+        profile["other_info"]["user_profile"] = agent_info["user_char"][agent_id]
+
+        user_info = UserInfo(
+            name=agent_info["username"][agent_id],
+            description=agent_info["description"][agent_id],
+            profile=profile,
+            recsys_type="twitter",
+        )
+
+        agent = SocialAgent(
+            agent_id=agent_id,
+            user_info=user_info,
+            model=model,
+            agent_graph=agent_graph,
+            available_actions=available_actions,
+        )
+
+        agent_graph.add_agent(agent)
     return agent_graph

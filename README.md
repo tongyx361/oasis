@@ -139,55 +139,89 @@ from camel.models import ModelFactory
 from camel.types import ModelPlatformType, ModelType
 
 import oasis
-from oasis import ActionType, EnvAction, SingleAction
+from oasis import (ActionType, LLMAction, ManualAction,
+                   generate_reddit_agent_graph)
 
 
 async def main():
-  # Define the model for the agents
-  openai_model = ModelFactory.create(
-      model_platform=ModelPlatformType.OPENAI,
-      model_type=ModelType.GPT_4O_MINI,
-  )
+    # Define the model for the agents
+    openai_model = ModelFactory.create(
+        model_platform=ModelPlatformType.OPENAI,
+        model_type=ModelType.GPT_4O_MINI,
+    )
 
-  # Define the available actions for the agents
-  available_actions = [
-      ActionType.LIKE_POST,
-      ActionType.CREATE_POST,
-      ActionType.CREATE_COMMENT,
-      ActionType.FOLLOW
-  ]
+    # Define the available actions for the agents
+    available_actions = [
+        ActionType.LIKE_POST,
+        ActionType.DISLIKE_POST,
+        ActionType.CREATE_POST,
+        ActionType.CREATE_COMMENT,
+        ActionType.LIKE_COMMENT,
+        ActionType.DISLIKE_COMMENT,
+        ActionType.SEARCH_POSTS,
+        ActionType.SEARCH_USER,
+        ActionType.TREND,
+        ActionType.REFRESH,
+        ActionType.DO_NOTHING,
+        ActionType.FOLLOW,
+        ActionType.MUTE,
+    ]
 
-  # Make the environment
-  env = oasis.make(
-      platform=oasis.DefaultPlatformType.REDDIT,
-      database_path="reddit_simulation.db",
-      agent_profile_path="./data/reddit/user_data_36.json",
-      agent_models=openai_model,
-      available_actions=available_actions,
-  )
+    agent_graph = await generate_reddit_agent_graph(
+        profile_path="./data/reddit/user_data_36.json",
+        model=openai_model,
+        available_actions=available_actions,
+    )
 
-  # Run the environment
-  await env.reset()
+    # Define the path to the database
+    db_path = "./data/reddit_simulation.db"
 
-  action = SingleAction(
-    agent_id=0,
-    action=ActionType.CREATE_POST,
-    args={"content": "Welcome to the OASIS World!"}
-  )
+    # Delete the old database
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
-  env_actions = EnvAction(
-    activate_agents=list(range(10)),  # activate the first 10 agents
-    intervention=[action]
-  )
+    # Make the environment
+    env = oasis.make(
+        agent_graph=agent_graph,
+        platform=oasis.DefaultPlatformType.REDDIT,
+        database_path=db_path,
+    )
 
-  # Apply interventions to the environment, refresh the recommendation system, and LLM agent perform actions
-  await env.step(env_actions)
+    # Run the environment
+    await env.reset()
 
-  # Close the environment
-  await env.close()
+    actions_1 = {}
+    actions_1[env.agent_graph.get_agent(0)] = [
+        ManualAction(action_type=ActionType.CREATE_POST,
+                     action_args={"content": "Hello, world!"}),
+        ManualAction(action_type=ActionType.CREATE_COMMENT,
+                     action_args={
+                         "post_id": "1",
+                         "content": "Welcome to the OASIS World!"
+                     })
+    ]
+    actions_1[env.agent_graph.get_agent(1)] = ManualAction(
+        action_type=ActionType.CREATE_COMMENT,
+        action_args={
+            "post_id": "1",
+            "content": "I like the OASIS world."
+        })
+    await env.step(actions_1)
+
+    actions_2 = {
+        agent: LLMAction()
+        for _, agent in env.agent_graph.get_agents()
+    }
+
+    # Perform the actions
+    await env.step(actions_2)
+
+    # Close the environment
+    await env.close()
+
 
 if __name__ == "__main__":
-  asyncio.run(main())
+    asyncio.run(main())
 ```
 
 <br>
@@ -210,17 +244,19 @@ To discover how to create profiles for large-scale users, as well as how to visu
 > We welcome community contributions! Join us in building these exciting features.
 
 - [Support Multi Modal Platform](https://github.com/camel-ai/oasis/issues/47)
-- [Connect to the Real World](https://github.com/camel-ai/oasis/issues/79)
 
 <!-- - Public release of our dataset on Hugging Face (November 05, 2024) -->
 
 ### Latest Updates
 
-📢 Refactor into the OASIS environment, publish camel-oasis on PyPI, and release the documentation. - 📆 April 24, 2025
+📢 Add the report post action to mark inappropriate content. - 📆 June 8, 2025
 
+- Add features for creating group chats, sending messages in group chats, and leaving group chats. - 📆 June 6, 2025
+- Support Interview Action for asking agents specific questions and getting answers. - 📆 June 2, 2025
+- Support customization of each agent's models, tools, and prompts; refactor the interface to follow the PettingZoo style. - 📆 May 22, 2025
+- Refactor into the OASIS environment, publish camel-oasis on PyPI, and release the documentation. - 📆 April 24, 2025
 - Support OPENAI Embedding model for Twhin-Bert Recommendation System. - 📆 March 25, 2025
-- Updated social media links and QR codes in the README! Join OASIS & CAMEL on WeChat, X, Reddit, and Discord. - 📆 March 24, 2025
-- Add multi-threading support to speed up LLM inference by 13x - 📆 March 4, 2025
+  ...
 - Slightly refactoring the database to add Quote Action and modify Repost Action - 📆 January 13, 2025
 - Added the demo video and oasis's star history in the README - 📆 January 5, 2025
 - Introduced an Electronic Mall on the Reddit platform - 📆 December 5, 2024
@@ -229,7 +265,7 @@ To discover how to create profiles for large-scale users, as well as how to visu
 
 ## 🥂 Contributing to OASIS🏝️
 
-> We greatly appreciate your interest in contributing to our open-source initiative. To ensure a smooth collaboration and the success of contributions, we adhere to a set of contributing guidelines similar to those established by CAMEL. For a comprehensive understanding of the steps involved in contributing to our project, please refer to the CAMEL [contributing guidelines](https://github.com/camel-ai/camel/blob/master/CONTRIBUTING.md). 🤝🚀
+> We greatly appreciate your interest in contributing to our open-source initiative. To ensure a smooth collaboration and the success of contributions, we adhere to a set of contributing guidelines similar to those established by CAMEL. For a comprehensive understanding of the steps involved in contributing to our project, please refer to the OASIS [contributing guidelines](https://github.com/camel-ai/oasis/blob/master/CONTRIBUTING.md). 🤝🚀
 >
 > An essential part of contributing involves not only submitting new features with accompanying tests (and, ideally, examples) but also ensuring that these contributions pass our automated pytest suite. This approach helps us maintain the project's quality and reliability by verifying compatibility and functionality.
 

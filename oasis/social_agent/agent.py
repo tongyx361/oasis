@@ -21,9 +21,10 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 from camel.agents import ChatAgent
 from camel.messages import BaseMessage
-from camel.models import BaseModelBackend
+from camel.models import BaseModelBackend, ModelManager
 from camel.prompts import TextPrompt
 from camel.toolkits import FunctionTool
+from camel.types import OpenAIBackendRole
 
 from oasis.social_agent.agent_action import SocialAction
 from oasis.social_agent.agent_environment import SocialEnvironment
@@ -48,6 +49,8 @@ if "sphinx" not in sys.modules:
                 "%(levelname)s - %(asctime)s - %(name)s - %(message)s"))
         agent_log.addHandler(file_handler)
 
+ALL_SOCIAL_ACTIONS = [action.value for action in ActionType]
+
 
 class SocialAgent(ChatAgent):
     r"""Social Agent."""
@@ -56,17 +59,19 @@ class SocialAgent(ChatAgent):
                  agent_id: int,
                  user_info: UserInfo,
                  user_info_template: TextPrompt | None = None,
-                 twitter_channel: Channel | None = None,
+                 channel: Channel | None = None,
                  model: Optional[Union[BaseModelBackend,
-                                       List[BaseModelBackend]]] = None,
+                                       List[BaseModelBackend],
+                                       ModelManager]] = None,
                  agent_graph: "AgentGraph" = None,
                  available_actions: list[ActionType] = None,
                  tools: Optional[List[Union[FunctionTool, Callable]]] = None,
-                 single_iteration: bool = True):
+                 single_iteration: bool = True,
+                 interview_record: bool = False):
         self.social_agent_id = agent_id
         self.user_info = user_info
-        self.twitter_channel = twitter_channel or Channel()
-        self.env = SocialEnvironment(SocialAction(agent_id, twitter_channel))
+        self.channel = channel or Channel()
+        self.env = SocialEnvironment(SocialAction(agent_id, self.channel))
         if user_info_template is None:
             system_message_content = self.user_info.to_system_message()
         else:
@@ -103,6 +108,7 @@ class SocialAgent(ChatAgent):
                          scheduling_strategy='random_model',
                          tools=all_tools,
                          single_iteration=single_iteration)
+        self.interview_record = interview_record
         self.agent_graph = agent_graph
 
     async def perform_action_by_llm(self):
@@ -129,14 +135,17 @@ class SocialAgent(ChatAgent):
                 # TODO: Should we uncomment this?
                 # Abort graph action for if 100w Agent
                 # self.perform_agent_graph_action(action_name, args)
+
+                return response
         except Exception as e:
             agent_log.error(f"Agent {self.social_agent_id} error: {e}")
             return e
 
     async def perform_test(self):
         """
-        doing test for all agents.
+        doing group polarization test for all agents.
         TODO: rewrite the function according to the ChatAgent.
+        TODO: unify the test and interview function.
         """
         # user conduct test to agent
         _ = BaseMessage.make_user_message(role_name="User",
@@ -169,6 +178,60 @@ class SocialAgent(ChatAgent):
         agent_log.info(
             f"Agent {self.social_agent_id} receive {response=}")
         return response
+
+    async def perform_interview(self, interview_prompt: str):
+        """
+        Perform an interview with the agent.
+        """
+        # user conduct test to agent
+        user_msg = BaseMessage.make_user_message(
+            role_name="User", content=("You are a twitter user."))
+
+        if self.interview_record:
+            # Test memory should not be writed to memory.
+            self.update_memory(message=user_msg, role=OpenAIBackendRole.SYSTEM)
+
+        openai_messages, num_tokens = self.memory.get_context()
+
+        openai_messages = ([{
+            "role":
+            self.system_message.role_name,
+            "content":
+            self.system_message.content.split("# RESPONSE FORMAT")[0],
+        }] + openai_messages + [{
+            "role": "user",
+            "content": interview_prompt
+        }])
+
+        agent_log.info(f"Agent {self.social_agent_id}: {openai_messages}")
+        # NOTE: this is a temporary solution.
+        # Camel can not stop updating the agents' memory after stop and astep
+        # now.
+
+        response = await self._aget_model_response(
+            openai_messages=openai_messages, num_tokens=num_tokens)
+
+        content = response.output_messages[0].content
+
+        if self.interview_record:
+            # Test memory should not be writed to memory.
+            self.update_memory(message=response.output_messages[0],
+                               role=OpenAIBackendRole.USER)
+        agent_log.info(
+            f"Agent {self.social_agent_id} receive response: {content}")
+
+        # Record the complete interview (prompt + response) through the channel
+        interview_data = {"prompt": interview_prompt, "response": content}
+        result = await self.env.action.perform_action(
+            interview_data, ActionType.INTERVIEW.value)
+
+        # Return the combined result
+        return {
+            "user_id": self.social_agent_id,
+            "prompt": openai_messages,
+            "content": content,
+            "success": result.get("success", False)
+        }
 
     async def perform_action_by_hci(self) -> Any:
         print("Please choose one function to perform:")
@@ -205,6 +268,12 @@ class SocialAgent(ChatAgent):
             if function_list[i].func.__name__ == func_name:
                 func = function_list[i].func
                 result = await func(*args, **kwargs)
+                self.update_memory(message=BaseMessage.make_user_message(
+                    role_name=OpenAIBackendRole.SYSTEM,
+                    content=f"Agent {self.social_agent_id} performed "
+                    f"{func_name} with args: {args} and kwargs: {kwargs}"
+                    f"and the result is {result}"),
+                                   role=OpenAIBackendRole.SYSTEM)
                 agent_log.info(f"Agent {self.social_agent_id}: {result}")
                 return result
         raise ValueError(f"Function {func_name} not found in the list.")

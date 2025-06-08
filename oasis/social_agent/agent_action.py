@@ -50,6 +50,12 @@ class SocialAction:
                 self.mute,
                 self.unmute,
                 self.purchase_product,
+                self.interview,
+                self.report_post,
+                self.join_group,
+                self.leave_group,
+                self.send_to_group,
+                self.create_group,
             ]
         ]
 
@@ -642,3 +648,110 @@ class SocialAction:
         purchase_message = (product_name, purchase_num)
         return await self.perform_action(purchase_message,
                                          ActionType.PURCHASE_PRODUCT.value)
+
+    async def interview(self, prompt: str):
+        r"""Interview an agent with the given prompt.
+
+        This method invokes an asynchronous action to interview an agent with a
+        specific prompt question. Upon successful execution,
+        it returns a dictionary containing a success status
+        and an interview_id for tracking.
+
+        Args:
+            prompt (str): The interview question or prompt to ask the agent.
+
+        Returns:
+            dict: A dictionary containing success status and an interview_id.
+
+            Example of a successful return:
+            {
+                "success": True,
+                "interview_id": "1621234567_0"  # Timestamp_UserID format
+            }
+        """
+        return await self.perform_action(prompt, ActionType.INTERVIEW.value)
+
+    async def report_post(self, post_id: int, report_reason: str):
+        r"""Report a specified post with a given reason.
+
+        This method invokes an asynchronous action to report a specified post
+        with a given reason. Upon successful execution, it returns a
+        dictionary indicating success and the ID of the newly created report.
+
+        Args:
+            post_id (int): The ID of the post to be reported.
+            report_reason (str): The reason for reporting the post.
+
+        Returns:
+            dict: A dictionary with two key-value pairs. The 'success' key
+                maps to a boolean indicating whether the report creation was
+                successful. The 'report_id' key maps to the integer ID of the
+                newly created report.
+
+            Example of a successful return:
+            {"success": True, "report_id": 123}
+
+        Note:
+            Attempting to report a post that the user has already reported will
+            result in a failure.
+        """
+        report_message = (post_id, report_reason)
+        return await self.perform_action(report_message,
+                                         ActionType.REPORT_POST.value)
+
+    async def create_group(self, group_name: str):
+        r"""Creates a new group on the platform.
+
+        Args:
+            group_name (str): The name of the group to be created.
+
+        Returns:
+            dict: Platform response indicating success or failure,
+            e.g.{"success": True, "group_id": 1}
+        """
+        return await self.perform_action(group_name,
+                                         ActionType.CREATE_GROUP.value)
+
+    async def join_group(self, group_id: int):
+        r"""Joins a group with the specified ID.
+
+        Args:
+            group_id (int): The ID of the group to join.
+
+        Returns:
+            dict: Platform response indicating success or failure,
+            e.g. {"success": True}
+        """
+        return await self.perform_action(group_id, ActionType.JOIN_GROUP.value)
+
+    async def leave_group(self, group_id: int):
+        r"""Leaves a group with the specified ID.
+
+        Args:
+            group_id (int): The ID of the group to leave.
+
+        Returns:
+            dict: Platform response indicating success or failure, e.g.
+            {"success": True}
+        """
+        return await self.perform_action(group_id,
+                                         ActionType.LEAVE_GROUP.value)
+
+    async def send_to_group(self, group_id: int, message: str):
+        r"""Sends a message to a specific group.
+
+        Args:
+            group_id (int): The ID of the target group.
+            message (str): The content of the message to send.
+
+        Returns:
+            dict: Platform response indicating success or failure, e.g.
+             {"success": True, "message_id": 123}
+        """
+        return await self.perform_action((group_id, message),
+                                         ActionType.SEND_TO_GROUP.value)
+
+    async def listen_from_group(self):
+        r"""Listen messages from groups"""
+        return await self.perform_action(self.agent_id,
+                                         ActionType.LISTEN_FROM_GROUP.value)

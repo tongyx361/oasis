@@ -112,6 +112,9 @@ class Platform:
         self.trend_num_days = 7
         self.trend_top_k = 1
 
+        # Report threshold setting
+        self.report_threshold = 2
+
         self.pl_utils = PlatformUtils(
             self.db,
             self.db_cursor,
@@ -119,6 +122,7 @@ class Platform:
             self.sandbox_clock,
             self.show_score,
             self.recsys_type,
+            self.report_threshold,
         )
 
     async def running(self):
@@ -180,8 +184,8 @@ class Platform:
             current_time = self.sandbox_clock.get_time_step()
         try:
             user_insert_query = (
-                "INSERT INTO user (user_id, agent_id, user_name, name, bio, "
-                "created_at, num_followings, num_followers) VALUES "
+                "INSERT INTO user (user_id, agent_id, user_name, name, "
+                "bio, created_at, num_followings, num_followers) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?)")
             self.pl_utils._execute_db_command(
                 user_insert_query,
@@ -283,7 +287,7 @@ class Platform:
                     "post.created_at, post.num_likes FROM post "
                     "JOIN follow ON post.user_id = follow.followee_id "
                     "WHERE follow.follower_id = ? "
-                    "ORDER BY post.num_likes DESC  "
+                    "ORDER BY post.num_likes DESC "
                     "LIMIT ?")
                 self.pl_utils._execute_db_command(
                     query_following_post,
@@ -337,28 +341,38 @@ class Platform:
                 user_table, post_table, trace_table, rec_matrix,
                 self.max_rec_post_len)
         elif self.recsys_type == RecsysType.TWHIN:
-            latest_post_time = post_table[-1]["created_at"]
-            post_query = "SELECT COUNT(*) " "FROM post " "WHERE created_at = ?"
-
-            # Obtain the number of new posts for incremental updates
-            self.pl_utils._execute_db_command(post_query, (latest_post_time, ))
-            result = self.db_cursor.fetchone()
-            latest_post_count = result[0]
-            if not latest_post_count:
-                return {
-                    "success": False,
-                    "message": "Fail to get latest posts count"
-                }
-            new_rec_matrix = rec_sys_personalized_twh(
-                user_table,
-                post_table,
-                latest_post_count,
-                trace_table,
-                rec_matrix,
-                self.max_rec_post_len,
-                self.sandbox_clock.time_step,
-                use_openai_embedding=self.use_openai_embedding,
-            )
+            try:
+                latest_post_time = post_table[-1]["created_at"]
+                second_latest_post_time = post_table[-2]["created_at"] if len(
+                    post_table) > 1 else latest_post_time
+                post_query = """
+                    SELECT COUNT(*)
+                    FROM post
+                    WHERE created_at = ? OR created_at = ?
+                """
+                self.pl_utils._execute_db_command(
+                    post_query, (latest_post_time, second_latest_post_time))
+                result = self.db_cursor.fetchone()
+                latest_post_count = result[0]
+                if not latest_post_count:
+                    return {
+                        "success": False,
+                        "message": "Fail to get latest posts count"
+                    }
+                new_rec_matrix = rec_sys_personalized_twh(
+                    user_table,
+                    post_table,
+                    latest_post_count,
+                    trace_table,
+                    rec_matrix,
+                    self.max_rec_post_len,
+                    self.sandbox_clock.time_step,
+                    use_openai_embedding=self.use_openai_embedding,
+                )
+            except Exception as e:
+                twitter_log.error(e)
+                # If no post in the platform, skip updating the rec table
+                return
         elif self.recsys_type == RecsysType.REDDIT:
             new_rec_matrix = rec_sys_reddit(post_table, rec_matrix,
                                             self.max_rec_post_len)
@@ -1328,5 +1342,301 @@ class Platform:
             self.pl_utils._record_trace(user_id, ActionType.DO_NOTHING.value,
                                         action_info, current_time)
             return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def interview(self, agent_id: int, interview_data):
+        """Interview an agent with the given prompt and record the response.
+
+        Args:
+            agent_id (int): The ID of the agent being interviewed.
+            interview_data: Either a string (prompt only) or dict with prompt
+                and response.
+
+        Returns:
+            dict: A dictionary with success status.
+        """
+        if self.recsys_type == RecsysType.REDDIT:
+            current_time = self.sandbox_clock.time_transfer(
+                datetime.now(), self.start_time)
+        else:
+            current_time = self.sandbox_clock.get_time_step()
+        try:
+            user_id = agent_id
+
+            # Handle both old format (string prompt) and new format
+            # (dict with prompt + response)
+            if isinstance(interview_data, str):
+                # Old format: just the prompt
+                prompt = interview_data
+                response = None
+                interview_id = f"{current_time}_{user_id}"
+                action_info = {"prompt": prompt, "interview_id": interview_id}
+            else:
+                # New format: dict with prompt and response
+                prompt = interview_data.get("prompt", "")
+                response = interview_data.get("response", "")
+                interview_id = f"{current_time}_{user_id}"
+                action_info = {
+                    "prompt": prompt,
+                    "response": response,
+                    "interview_id": interview_id
+                }
+
+            # Record the interview in the trace table
+            self.pl_utils._record_trace(user_id, ActionType.INTERVIEW.value,
+                                        action_info, current_time)
+
+            return {"success": True, "interview_id": interview_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def report_post(self, agent_id: int, report_message: tuple):
+        post_id, report_reason = report_message
+        if self.recsys_type == RecsysType.REDDIT:
+            current_time = self.sandbox_clock.time_transfer(
+                datetime.now(), self.start_time)
+        else:
+            current_time = self.sandbox_clock.get_time_step()
+        try:
+            user_id = agent_id
+            post_type_result = self.pl_utils._get_post_type(post_id)
+
+            # Check if a report record already exists
+            check_report_query = (
+                "SELECT * FROM report WHERE user_id = ? AND post_id = ?")
+            self.pl_utils._execute_db_command(check_report_query,
+                                              (user_id, post_id))
+            if self.db_cursor.fetchone():
+                return {
+                    "success": False,
+                    "error": "Report record already exists."
+                }
+
+            if not post_type_result:
+                return {"success": False, "error": "Post not found."}
+
+            # Update the number of reports in the post table
+            update_reports_query = (
+                "UPDATE post SET num_reports = num_reports + 1 WHERE "
+                "post_id = ?")
+            self.pl_utils._execute_db_command(update_reports_query,
+                                              (post_id, ),
+                                              commit=True)
+
+            # Add a report in the report table
+            report_insert_query = (
+                "INSERT INTO report (post_id, user_id, report_reason, "
+                "created_at) VALUES (?, ?, ?, ?)")
+            self.pl_utils._execute_db_command(
+                report_insert_query,
+                (post_id, user_id, report_reason, current_time),
+                commit=True)
+
+            # Get the ID of the newly inserted report record
+            report_id = self.db_cursor.lastrowid
+
+            # Record the action in the trace table
+            action_info = {"post_id": post_id, "report_id": report_id}
+            self.pl_utils._record_trace(user_id, ActionType.REPORT_POST.value,
+                                        action_info, current_time)
+
+            return {"success": True, "report_id": report_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def send_to_group(self, agent_id: int, message: tuple):
+        group_id, content = message
+        if self.recsys_type == RecsysType.REDDIT:
+            current_time = self.sandbox_clock.time_transfer(
+                datetime.now(), self.start_time)
+        else:
+            current_time = self.sandbox_clock.get_time_step()
+        try:
+            user_id = agent_id
+            # check if user is a member of the group
+            check_query = ("SELECT * FROM group_members WHERE group_id = ? "
+                           "AND agent_id = ?")
+            self.pl_utils._execute_db_command(check_query, (group_id, user_id))
+            if not self.db_cursor.fetchone():
+                return {
+                    "success": False,
+                    "error": "User is not a member of this group.",
+                }
+
+            # Insert the message into the group_messages table
+            insert_query = """
+                INSERT INTO group_messages
+                (group_id, sender_id, content, sent_at)
+                VALUES (?, ?, ?, ?)
+            """
+            self.pl_utils._execute_db_command(
+                insert_query, (group_id, user_id, content, current_time),
+                commit=True)
+            message_id = self.db_cursor.lastrowid
+
+            # get the group members
+            members_query = ("SELECT agent_id FROM group_members WHERE "
+                             "group_id = ? AND agent_id != ?")
+            self.pl_utils._execute_db_command(members_query,
+                                              (group_id, user_id))
+            members = [row[0] for row in self.db_cursor.fetchall()]
+            action_info = {
+                "group_id": group_id,
+                "message_id": message_id,
+                "content": content,
+            }
+            self.pl_utils._record_trace(user_id,
+                                        ActionType.SEND_TO_GROUP.value,
+                                        action_info, current_time)
+
+            return {"success": True, "message_id": message_id, "to": members}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def create_group(self, agent_id: int, group_name: str):
+        if self.recsys_type == RecsysType.REDDIT:
+            current_time = self.sandbox_clock.time_transfer(
+                datetime.now(), self.start_time)
+        else:
+            current_time = self.sandbox_clock.get_time_step()
+        try:
+            user_id = agent_id
+
+            # insert the group into the groups table
+            insert_query = """
+                INSERT INTO chat_group (name, created_at) VALUES (?, ?)
+            """
+            self.pl_utils._execute_db_command(insert_query,
+                                              (group_name, current_time),
+                                              commit=True)
+            group_id = self.db_cursor.lastrowid
+
+            # insert the user as a member of the group
+            join_query = """
+                INSERT INTO group_members (group_id, agent_id, joined_at)
+                VALUES (?, ?, ?)
+            """
+            self.pl_utils._execute_db_command(
+                join_query, (group_id, user_id, current_time), commit=True)
+
+            action_info = {"group_id": group_id, "group_name": group_name}
+            self.pl_utils._record_trace(user_id, ActionType.CREATE_GROUP.value,
+                                        action_info, current_time)
+
+            return {"success": True, "group_id": group_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def join_group(self, agent_id: int, group_id: int):
+        if self.recsys_type == RecsysType.REDDIT:
+            current_time = self.sandbox_clock.time_transfer(
+                datetime.now(), self.start_time)
+        else:
+            current_time = self.sandbox_clock.get_time_step()
+        try:
+            user_id = agent_id
+
+            # check if group exists
+            check_group_query = """SELECT * FROM chat_group
+                WHERE group_id = ?"""
+            self.pl_utils._execute_db_command(check_group_query, (group_id, ))
+            if not self.db_cursor.fetchone():
+                return {"success": False, "error": "Group does not exist."}
+
+            # check if user is already in the group
+            check_member_query = (
+                "SELECT * FROM group_members WHERE group_id = ? "
+                "AND agent_id = ?")
+            self.pl_utils._execute_db_command(check_member_query,
+                                              (group_id, user_id))
+            if self.db_cursor.fetchone():
+                return {
+                    "success": False,
+                    "error": "User is already in the group."
+                }
+
+            # join the group
+            join_query = """
+                INSERT INTO group_members
+                (group_id, agent_id, joined_at) VALUES (?, ?, ?)
+            """
+            self.pl_utils._execute_db_command(
+                join_query, (group_id, user_id, current_time), commit=True)
+
+            action_info = {"group_id": group_id}
+            self.pl_utils._record_trace(user_id, ActionType.JOIN_GROUP.value,
+                                        action_info, current_time)
+
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def leave_group(self, agent_id: int, group_id: int):
+        try:
+            user_id = agent_id
+
+            # check if user is a member of the group
+            check_query = ("SELECT * FROM group_members "
+                           "WHERE group_id = ? AND agent_id = ?")
+            self.pl_utils._execute_db_command(check_query, (group_id, user_id))
+            if not self.db_cursor.fetchone():
+                return {
+                    "success": False,
+                    "error": "User is not a member of this group."
+                }
+
+            # delete the member record
+            delete_query = ("DELETE FROM group_members "
+                            "WHERE group_id = ? AND agent_id = ?")
+            self.pl_utils._execute_db_command(delete_query,
+                                              (group_id, user_id),
+                                              commit=True)
+
+            action_info = {"group_id": group_id}
+            self.pl_utils._record_trace(user_id, ActionType.LEAVE_GROUP.value,
+                                        action_info)
+
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def listen_from_group(self, agent_id: int):
+        try:
+            # get all groups Dict[group_id, group_name]
+            query = """ SELECT * FROM chat_group """
+            self.pl_utils._execute_db_command(query)
+            all_groups = {}
+            for row in self.db_cursor.fetchall():
+                all_groups[row[0]] = row[1]
+
+            # get all groups that the user is a member of
+            in_query = """
+                SELECT group_id FROM group_members WHERE agent_id = ?
+            """
+            self.pl_utils._execute_db_command(in_query, (agent_id, ))
+            joined_group_ids = [row[0] for row in self.db_cursor.fetchall()]
+
+            # get all messages from those groups, Dict[group_id, [messages]]
+            messages = {}
+            for group_id in joined_group_ids:
+                select_query = """
+                    SELECT message_id, content, sender_id,
+                    sent_at FROM group_messages WHERE group_id = ?
+                """
+                self.pl_utils._execute_db_command(select_query, (group_id, ))
+                messages[group_id] = [{
+                    "message_id": row[0],
+                    "content": row[1],
+                    "sender_id": row[2],
+                    "sent_at": row[3],
+                } for row in self.db_cursor.fetchall()]
+
+            return {
+                "success": True,
+                "all_groups": all_groups,
+                "joined_groups": joined_group_ids,
+                "messages": messages
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
