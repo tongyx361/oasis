@@ -136,7 +136,10 @@ async def generate_agents(
 
         following_id_list_literal = agent_info["following_agentid_list"][agent_id]
         # print(f"Parsing {following_id_list_literal=}")
-        following_id_list = ast.literal_eval(following_id_list_literal)
+        try:
+            following_id_list = ast.literal_eval(following_id_list_literal)
+        except Exception:
+            following_id_list = following_id_list_literal
         if not isinstance(following_id_list, int):
             if len(following_id_list) != 0:
                 for follow_id in following_id_list:
@@ -152,7 +155,10 @@ async def generate_agents(
 
         previous_posts_literal = agent_info["previous_tweets"][agent_id]
         # print(f"Parsing {previous_posts_literal=}")
-        previous_posts = ast.literal_eval(previous_posts_literal)
+        try:
+            previous_posts = ast.literal_eval(previous_posts_literal)
+        except Exception:
+            previous_posts = previous_posts_literal
         if len(previous_posts) != 0:
             for post in previous_posts:
                 post_list.append((agent_id, post, start_time, 0, 0))
@@ -231,9 +237,14 @@ async def generate_agents_100w(
 
     # precompute to speed up agent generation in one million scale
     _ = agent_info["following_agentid_list"].apply(ast.literal_eval)
-    previous_tweets_lists = agent_info["previous_tweets"].apply(ast.literal_eval)
-    previous_tweets_lists = agent_info["previous_tweets"].apply(ast.literal_eval)
-    following_id_lists = agent_info["following_agentid_list"].apply(ast.literal_eval)
+    try:
+        previous_tweets_lists = agent_info["previous_tweets"].apply(ast.literal_eval)
+    except Exception:
+        previous_tweets_lists = agent_info["previous_tweets"]
+    try:
+        following_id_lists = agent_info["following_agentid_list"].apply(ast.literal_eval)
+    except Exception:
+        following_id_lists = agent_info["following_agentid_list"]
 
     for agent_id in tqdm.tqdm(range(len(agent_info))):
         profile = {
